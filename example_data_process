@@ -1,0 +1,91 @@
+'''
+@Author: haozhi chen
+@Date: 2023-09-18
+@Target: 进行LSTM-GCN的实验测试，数据处理部分
+'''
+import pandas as pd
+import numpy as np
+import torch
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+
+sc = StandardScaler()
+
+"读取指数文件"
+def read_data():
+    filename1 = '~/GCN_LSTM_Prediction_Project/SZAMarketIndex.csv' # 基础的指数数据
+    filename2 = '~/GCN_LSTM_Prediction_Project/SZMarketIndex_all.csv' # 包含了更多信息
+    df = pd.read_csv(filename2)
+    print(df.head())
+    "数据的清洗"
+    # 1.时间范围
+    df = df[df.Trddt > '2020-01-01']
+    # 2.数据包含
+    df = df.reset_index().drop(columns=['index','Indexcd'])
+    outputdf = df[['Clsindex','Opnindex','Hiindex','Loindex','Retindex']]
+    print(outputdf.head())
+    
+    "数据绘制"
+    # df = df[['Trddt', 'Clsindex']]
+    # plotdf = df.set_index('Trddt')
+    # plotdf.plot()
+    # plt.show()
+    
+    return outputdf
+
+def data_to_tensor(data,trainpos,valpos,feapos,stamps):
+    '''
+    :param df: 数据集
+    :param trainpos: 训练数据，验证数据比例
+    :param valpos: 验证数据，测试数据比例
+    :param stamps: 时间戳
+    :param feapos: 特征所在位置
+    :return:
+    '''
+    data.dropna(axis=0,inplace=True)
+    rows = data.shape[0] # 行个数
+
+    "手动划分训练，验证和测试集"
+    train_length,val_length,test_length = int(np.ceil(rows*trainpos)),int(np.ceil(rows*valpos)),int(np.ceil(rows))
+    train_set = data.iloc[0:train_length,:].values # 训练数据集部分
+    val_set = data.iloc[train_length:val_length,:].values # 验证集
+    test_set = data.iloc[val_length:,:].values
+
+    "标准化"
+    train_set,val_set,test_set = sc.fit_transform(train_set),sc.fit_transform(val_set),sc.fit_transform(test_set)
+
+    "制作张量数据"
+    print(train_set[:5]) # 让我们现在打印出归一化训练数据的前5条
+    # 下一步是将我们的数据集转换为张量，因为 PyTorch 模型使用张量进行训练，使用tensor如下所示：
+    train_data = torch.FloatTensor(train_set)
+    val_data = torch.FloatTensor(val_set)
+    test_data = torch.FloatTensor(test_set)
+    print(len(train_data))
+
+    # 设置一个预测步长
+    train_window = 12 # 意味着用前12个数据预测第十三个
+
+    def create_inout_sequences(input_data, tw):
+        inout_seq = []
+        L = len(input_data)
+        for i in range(L - tw):
+            train_seq = input_data[i:i + tw]
+            train_label = input_data[i + tw:i + tw + 1,0] # 标签选择第n+1个，其中 0 表示0列位置的数据为Y标签
+            train_label = train_label.view(train_label.shape[0],-1)
+            inout_seq.append((train_seq, train_label))
+        return inout_seq
+
+    train_inout_seq = create_inout_sequences(train_data, train_window)
+    val_inout_seq = create_inout_sequences(val_data,train_window)
+    test_inout_seq = create_inout_sequences(test_data,train_window)
+    # print(train_inout_seq[:5])
+
+    return train_inout_seq,val_inout_seq,test_inout_seq,sc
+
+
+
+if __name__ == '__main__':
+    stock_data = read_data()
+    "df to tf 参数"
+    trainpos, valpos, stamps, feapos = 0.6, 0.8, 15, 1
+    data_to_tensor(stock_data, trainpos, valpos, feapos,stamps)
