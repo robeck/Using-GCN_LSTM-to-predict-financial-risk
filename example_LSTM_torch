@@ -1,0 +1,114 @@
+'''
+@Author: haozhi chen
+'''
+import torch
+import torch.nn as nn
+
+import seaborn as sns
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from Models import Data_process
+from tqdm import tqdm
+from sklearn.metrics import mean_absolute_percentage_error,mean_squared_error,accuracy_score
+
+
+"Pre_read_data"
+stock_data = Data_process.read_data()
+trainpos, valpos, stamps, feapos = 0.6, 0.8, 15, 1
+train_inout_seq,val_inout_seq,test_inout_seq,scaler \
+    = Data_process.data_to_tensor(stock_data, trainpos, valpos, feapos, stamps) # 读到了数据
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # 确定cpu还是Gpu
+features = train_inout_seq[:1][0][0].shape[1]
+print(features)
+
+"1. 建立模型"
+class LSTM(nn.Module):
+    def __init__(self, input_size=5, hidden_layer_size=100,num_layers=2, output_size=1):
+        super().__init__()
+        self.hidden_layer_size = hidden_layer_size
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(input_size, hidden_layer_size,num_layers)
+        self.linear = nn.Linear(hidden_layer_size,output_size) # Linear是一个线性输出层，也可以是激活函数
+
+    def forward(self, input_seq):
+        # 每个时间步长都有一个隐藏状态 和 一个记忆单元
+        h0 = torch.zeros(self.num_layers, 1, self.hidden_layer_size)
+        c0 = torch.zeros(self.num_layers, 1, self.hidden_layer_size)
+        # print(h0.dtype)
+        # LSTM算法接受 三个输入，先前隐藏状态，先前单元格状态和当前输入。hidden_cell变量包含先前隐藏和单元格状态。
+        lstm_out, (hn,cn) = self.lstm(input_seq.view(len(input_seq),1,5),(h0,c0))
+        # print(lstm_out.shape)
+        predictions = self.linear(lstm_out) # （）括号中相当于LSTM取最后一个时间步长的输出作为全连接层的输入
+        return predictions[-1,:,:] # 输出给最后一个值
+
+
+model = LSTM().to(device)
+loss_function = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+def model_construction():
+    "2. 训练模型"
+    epoch = 150
+    for i in range(epoch):
+        for seq,label in train_inout_seq:
+            y_pred = model(seq)
+            single_loss = loss_function(y_pred,label)
+            single_loss.backward() # 损失函数反向传播
+            optimizer.step() # 优化函数逐步更新
+            optimizer.zero_grad() # 所有优化的梯度归0
+            # model.hidden_cell = (torch.tensor(1,1,model.hidden_layer_size),torch.tensor(1,1,model.hidden_layer_size)) # 注
+            # print(seq)
+            # print(label)
+
+        if i%25 == 1:
+            print(f'epoch:{i} loss:{single_loss.item()}')
+    print(f'epoch:{epoch} loss:{single_loss}')
+    # saving models
+    torch.save(model.state_dict(),"model.pth")
+    print('save model')
+    
+    return model
+
+
+def model_prediction():
+    model = LSTM().to(device)
+    model.load_state_dict(torch.load("model.pth"))
+    "3. 测试/预测"
+    model.eval()
+    pred = []
+    y = []
+    print('predicting.....')
+    for (seq,label) in tqdm(test_inout_seq):
+        y.extend(label.tolist()[0])
+        with torch.no_grad():
+            y_pred = model(seq)
+            pred.extend(y_pred.tolist()[0])
+    # 结果的评价
+    print(y)
+    print(pred)
+    y, pred = np.array(y),np.array(pred)
+    MAPE = mean_absolute_percentage_error(y,pred)
+    MES = mean_squared_error(y,pred)
+    # ACC = accuracy_score(y,pred) # acc用于分类评价
+    print(f'prediction evaluate etrics, MAPE:{MAPE}, MES:{MES}')
+
+
+    "4. 逆标准化，绘制"
+    # 要逆标准化，数据的格式就有问题，因此需要一个缩放
+    pred_broadcast = np.repeat(pred,features) # features 特征个数，也就是要回到原始数据的格式
+    actual_predcition = scaler.inverse_transform(np.reshape(pred_broadcast,(len(pred),features)))[:,0]
+    # 要逆标准化，数据的格式就有问题，因此需要一个缩放
+    y_broadcast = np.repeat(y,features)
+    actual_y = scaler.inverse_transform(np.reshape(y_broadcast,(len(y),features)))[:,0]
+
+    # 绘制的过程
+    plt.plot(actual_y,c='blue',marker='*',alpha=0.75)
+    plt.plot(actual_predcition,c='red',marker='o',alpha=0.75)
+    plt.show()
+
+if __name__ == '__main__':
+    # model_construction()
+    model_prediction()
